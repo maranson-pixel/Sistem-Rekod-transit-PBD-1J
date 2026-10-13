@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Rekod Transit PBD</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        glass: 'rgba(255, 255, 255, 0.6)',
+                        glassBorder: 'rgba(255, 255, 255, 0.3)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for in-browser JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+        
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.45);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(255,255,255,0.2); border-radius: 4px;}
+        ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.4); }
+
+        /* Print Media Query - Optimized for 1 Page */
+        @media print {
+            @page { margin: 1cm; }
+            body { 
+                background: white !important; 
+                -webkit-print-color-adjust: exact; 
+                color: black;
+                font-size: 11px; /* Mengecilkan saiz fon keseluruhan */
+            }
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            .glass-panel { 
+                background: white !important; 
+                backdrop-filter: none !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+            }
+            textarea {
+                border: none !important;
+                resize: none !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                height: auto !important;
+                overflow: hidden;
+            }
+            #report-container {
+                width: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            /* Membuang page break untuk memastikan ia muat 1 mukasurat */
+            .page-break { page-break-before: auto; }
+        }
+    </style>
+</head>
+<body class="text-gray-800 antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- UTILS & LOGIC ---
+        const getTP = (mark) => {
+            if (mark === '' || mark === null) return 0;
+            const m = parseInt(mark);
+            if (m >= 90) return 6;
+            if (m >= 75) return 5;
+            if (m >= 60) return 4;
+            if (m >= 40) return 3;
+            if (m >= 20) return 2;
+            if (m >= 0) return 1;
+            return 0;
+        };
+
+        const getTPBadge = (tp) => {
+            const colors = {
+                0: 'bg-gray-200 text-gray-500',
+                1: 'bg-red-500 text-white shadow-red-500/50',
+                2: 'bg-orange-500 text-white shadow-orange-500/50',
+                3: 'bg-yellow-400 text-yellow-900 shadow-yellow-400/50',
+                4: 'bg-blue-500 text-white shadow-blue-500/50',
+                5: 'bg-purple-500 text-white shadow-purple-500/50',
+                6: 'bg-green-500 text-white shadow-green-500/50'
+            };
+            return `px-2 py-1 rounded-md text-xs font-bold shadow-sm ${colors[tp]}`;
+        };
+
+        const generateUlasan = (avgTP) => {
+            if(avgTP === 0) return "";
+            if(avgTP < 3) return "Murid memerlukan bimbingan rapi dan intervensi berterusan secara individu untuk menguasai asas. Tindakan susulan segera diperlukan.";
+            if(avgTP < 5) return "Prestasi memuaskan. Murid perlu melakukan lebih banyak latihan pengukuhan untuk meningkatkan tahap kefahaman konsep matematik.";
+            return "Tahniah! Murid menunjukkan penguasaan cemerlang. Teruskan kecemerlangan dan banyakkan latihan pengayaan KBAT.";
+        };
+
+        // --- COMPONENTS ---
+        
+        // 1. Chart Components
+        const BarChart = ({ data }) => {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartInstance.current) chartInstance.current.destroy();
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['TP 1', 'TP 2', 'TP 3', 'TP 4', 'TP 5', 'TP 6'],
+                        datasets: [{
+                            label: 'Jumlah Pelajar',
+                            data: data,
+                            backgroundColor: ['#ef4444', '#f97316', '#facc15', '#3b82f6', '#a855f7', '#22c55e'].map(c => c + 'B3'),
+                            borderColor: ['#ef4444', '#f97316', '#facc15', '#3b82f6', '#a855f7', '#22c55e'],
+                            borderWidth: 1, borderRadius: 4
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                });
+                return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+            }, [data]);
+
+            return <div className="h-48 md:h-64"><canvas ref={chartRef}></canvas></div>;
+        };
+
+        const RadarChart = ({ marks, topics }) => {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartInstance.current) chartInstance.current.destroy();
+                const ctx = chartRef.current.getContext('2d');
+                const dataPoints = topics.map((_, i) => parseInt(marks[`T${i+1}`]) || 0);
+
+                chartInstance.current = new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: topics.map((t, i) => `T${i+1}`),
+                        datasets: [{
+                            label: 'Markah Topik (%)',
+                            data: dataPoints,
+                            backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                            borderColor: 'rgba(99, 102, 241, 1)',
+                            pointBackgroundColor: 'rgba(99, 102, 241, 1)',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { r: { suggestedMin: 0, suggestedMax: 100, pointLabels: { font: { size: 10 } } } }
+                    }
+                });
+                return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+            }, [marks, topics]);
+
+            // Dikecilkan saiz graf radar untuk cetakan muat 1 muka surat
+            return <div className="h-56 w-full"><canvas ref={chartRef}></canvas></div>;
+        };
+
+        // 2. Main App
+        const App = () => {
+            const defaultTopics = [
+                "Nombor Nisbah", "Faktor dan Gandaan", "Kuasa Dua, Punca Kuasa Dua, Kuasa Tiga dan Punca Kuasa Tiga",
+                "Nisbah, Kadar dan Kadaran", "Ungkapan Algebra", "Persamaan Linear", "Ketaksamaan Linear",
+                "Garis dan Sudut", "Poligon Asas", "Perimeter dan Luas", "Pengenalan Set", "Pengendalian Data", "Teorem Pythagoras"
+            ];
+            const defaultStudents = [
+                { id: 1, name: "ALISRON A/L ALANG", marks: {} }
+            ];
+
+            const [activeTab, setActiveTab] = useState('report');
+            const [schoolLogo, setSchoolLogo] = useState(localStorage.getItem('pbd_logo') || '');
+            const [subject, setSubject] = useState(localStorage.getItem('pbd_subject') || 'Matematik');
+            const [level, setLevel] = useState(localStorage.getItem('pbd_level') || 'Tingkatan 1');
+            const [topics, setTopics] = useState(() => JSON.parse(localStorage.getItem('pbd_topics')) || defaultTopics);
+            const [students, setStudents] = useState(() => JSON.parse(localStorage.getItem('pbd_students')) || defaultStudents);
+
+            useEffect(() => {
+                localStorage.setItem('pbd_subject', subject);
+                localStorage.setItem('pbd_level', level);
+                localStorage.setItem('pbd_topics', JSON.stringify(topics));
+                localStorage.setItem('pbd_students', JSON.stringify(students));
+                localStorage.setItem('pbd_logo', schoolLogo);
+            }, [subject, level, topics, students, schoolLogo]);
+
+            const handleUpdateMark = (studentId, topicKey, value) => {
+                let val = parseInt(value);
+                if (val > 100) val = 100; if (val < 0) val = 0;
+                setStudents(students.map(s => s.id === studentId ? { ...s, marks: { ...s.marks, [topicKey]: isNaN(val) ? '' : val } } : s));
+            };
+
+            const classStats = useMemo(() => {
+                let totalMarks = 0, totalEntries = 0, tpCounts = [0, 0, 0, 0, 0, 0, 0], intervensi = [], cemerlang = [];
+                students.forEach(s => {
+                    let sTotal = 0, sCount = 0;
+                    Object.values(s.marks).forEach(m => { if (m !== '' && m !== null) { totalMarks += parseInt(m); totalEntries++; sTotal += parseInt(m); sCount++; } });
+                    const overallTP = getTP(sCount > 0 ? Math.round(sTotal / sCount) : 0);
+                    if(sCount > 0) {
+                        tpCounts[overallTP]++;
+                        if (overallTP <= 2) intervensi.push({name: s.name, tp: overallTP});
+                        if (overallTP >= 5) cemerlang.push({name: s.name, tp: overallTP});
+                    }
+                });
+                return { totalStudents: students.length, avgMark: totalEntries > 0 ? Math.round(totalMarks / totalEntries) : 0, avgTP: getTP(totalEntries > 0 ? Math.round(totalMarks / totalEntries) : 0), tpDistribution: tpCounts.slice(1), intervensi, cemerlang };
+            }, [students]);
+
+            const [selectedStudentId, setSelectedStudentId] = useState(students.length > 0 ? students[0].id : null);
+            
+            // --- REDESIGNED REPORT SECTION ---
+            const renderReport = () => {
+                const targetStudent = students.find(s => s.id === parseInt(selectedStudentId));
+                let avgTP = 0, avgMark = 0;
+                if(targetStudent) {
+                    let total = 0, count = 0;
+                    Object.values(targetStudent.marks).forEach(m => { if(m !== '' && m !== null) { total += parseInt(m); count++; } });
+                    if(count > 0) { avgMark = Math.round(total / count); avgTP = getTP(avgMark); }
+                }
+
+                return (
+                    <div className="space-y-4">
+                        <div className="glass-panel p-4 rounded-xl flex items-center justify-between no-print">
+                            <div className="flex items-center space-x-3">
+                                <label className="font-semibold text-gray-700">Pilih Pelajar:</label>
+                                <select className="p-2 rounded-lg border border-gray-300 bg-white/80 focus:ring-2 focus:ring-blue-400 outline-none w-64" value={selectedStudentId || ''} onChange={(e) => setSelectedStudentId(e.target.value)}>
+                                    {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                            </div>
+                            <button onClick={() => window.print()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-md">Cetak / Eksport PDF</button>
+                        </div>
+
+                        {targetStudent && (
+                            <div id="report-container" className="glass-panel p-6 md:p-8 rounded-2xl max-w-4xl mx-auto bg-white/80">
+                                {/* Header - Dipadatkan */}
+                                <div className="flex justify-between items-center border-b-2 border-gray-800 pb-3 mb-4">
+                                    <div className="flex items-center space-x-3">
+                                        {schoolLogo ? <img src={schoolLogo} alt="Logo" className="w-14 h-14 object-contain" /> : <div className="w-14 h-14 bg-gray-200 rounded flex items-center justify-center text-[10px] text-gray-500">Tiada Logo</div>}
+                                        <div>
+                                            <h1 className="text-xl font-bold text-gray-900 uppercase leading-tight">Pelaporan Pentaksiran Bilik Darjah (PBD)</h1>
+                                            <p className="text-sm text-gray-600 font-medium">{subject} | {level}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Maklumat Pelajar - Dipadatkan */}
+                                <div className="flex justify-between items-center mb-4 p-3 bg-gray-50 rounded border border-gray-200">
+                                    <div>
+                                        <p className="text-xs text-gray-500 font-semibold mb-0.5">NAMA PELAJAR</p>
+                                        <h2 className="text-lg font-bold text-gray-800">{targetStudent.name}</h2>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="text-xs text-gray-500 font-semibold mb-0.5">TAHAP PENGUASAAN</p>
+                                        <div className="inline-block px-3 py-1 rounded text-base font-bold border border-current text-gray-800">
+                                            TP {avgTP}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Jadual & Graf bersebelahan (Buang page-break) */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                        <h3 className="font-bold text-sm text-gray-800 mb-2 border-b border-gray-300 pb-1">Pencapaian Topik</h3>
+                                        <table className="w-full text-[11px] border-collapse border border-gray-300 leading-tight">
+                                            <thead className="bg-gray-100">
+                                                <tr>
+                                                    <th className="border border-gray-300 p-1 text-left">Kod</th>
+                                                    <th className="border border-gray-300 p-1 text-left">Topik</th>
+                                                    <th className="border border-gray-300 p-1 text-center w-12">Mrkh</th>
+                                                    <th className="border border-gray-300 p-1 text-center w-12">TP</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {topics.map((t, i) => {
+                                                    const mark = targetStudent.marks[`T${i+1}`];
+                                                    return (
+                                                        <tr key={i}>
+                                                            <td className="border border-gray-300 p-1 font-medium text-center">T{i+1}</td>
+                                                            <td className="border border-gray-300 p-1 truncate max-w-[150px]" title={t}>{t}</td>
+                                                            <td className="border border-gray-300 p-1 text-center">{mark !== undefined && mark !== '' ? mark : '-'}</td>
+                                                            <td className="border border-gray-300 p-1 text-center font-bold">{mark !== undefined && mark !== '' ? getTP(mark) : '-'}</td>
+                                                        </tr>
+                                                    )
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <div className="flex flex-col">
+                                        <h3 className="font-bold text-sm text-gray-800 mb-2 border-b border-gray-300 pb-1">Graf Perkembangan</h3>
+                                        <div className="flex-grow flex items-center justify-center">
+                                            <RadarChart marks={targetStudent.marks} topics={topics} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Ulasan - Dipadatkan */}
+                                <div className="mb-6">
+                                    <h3 className="font-bold text-sm text-gray-800 mb-1">Ulasan Guru</h3>
+                                    <textarea className="w-full h-16 p-2 text-xs border border-gray-300 rounded bg-gray-50 outline-none print:h-auto" defaultValue={generateUlasan(avgTP)}></textarea>
+                                </div>
+
+                                {/* Tandatangan - Dikurangkan jarak vertikal */}
+                                <div className="grid grid-cols-2 gap-8 pt-4">
+                                    <div className="text-center">
+                                        <div className="border-b border-gray-800 w-3/4 mx-auto mb-1"></div>
+                                        <p className="font-semibold text-xs text-gray-800">Guru Mata Pelajaran</p>
+                                    </div>
+                                    <div className="text-center">
+                                        <div className="border-b border-gray-800 w-3/4 mx-auto mb-1"></div>
+                                        <p className="font-semibold text-xs text-gray-800">Ibu Bapa / Penjaga</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <header className="glass-panel p-4 rounded-2xl mb-6 flex justify-between items-center no-print">
+                        <div className="flex items-center space-x-4">
+                            {schoolLogo ? <img src={schoolLogo} className="w-10 h-10 object-contain" /> : <div className="w-10 h-10 bg-white/50 rounded-full flex items-center justify-center border border-white/60 text-[10px] text-gray-400">Logo</div>}
+                            <div>
+                                <h1 className="text-xl font-bold text-gray-900">Sistem Rekod Transit PBD</h1>
+                            </div>
+                        </div>
+                        <nav className="flex space-x-1 bg-white/30 p-1 rounded-lg">
+                            {['report'].map(tab => (
+                                <button key={tab} onClick={() => setActiveTab(tab)} className="px-4 py-2 rounded-md text-sm font-semibold bg-white shadow-sm text-indigo-700">Laporan Individu</button>
+                            ))}
+                        </nav>
+                    </header>
+                    <main>{activeTab === 'report' && renderReport()}</main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
